@@ -7,8 +7,10 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Net;
+using System.Threading.Tasks;
 
 namespace NetcoreHttp2
 {
@@ -22,7 +24,7 @@ namespace NetcoreHttp2
                .ConfigureLogging((_, factory) =>
                {
                     // Set logging to the MAX.
-                    factory.SetMinimumLevel(LogLevel.Trace);
+                    //factory.SetMinimumLevel(LogLevel.Trace);
                    factory.AddConsole();
                })
                .UseKestrel()
@@ -52,6 +54,7 @@ namespace NetcoreHttp2
                     options.Listen(IPAddress.Any, basePort + 5, listenOptions =>
                    {
                        listenOptions.Protocols = HttpProtocols.Http2;
+                       listenOptions.UseConnectionLogging(); ;
                    });
                })
                .UseContentRoot(Directory.GetCurrentDirectory())
@@ -72,11 +75,56 @@ namespace NetcoreHttp2
 
         public void Configure(IApplicationBuilder app, IHostingEnvironment env)
         {
-            // app.UseTimingMiddleware();
+            app.UseTimingMiddleware();
             app.Run(context =>
             {
                 return context.Response.WriteAsync("Hello World! " + context.Request.Protocol);
             });
         }
     }
+
+
+    public class TimingMiddleware
+    {
+        private readonly RequestDelegate _next;
+
+        public TimingMiddleware(RequestDelegate next)
+        {
+            _next = next;
+        }
+
+        public async Task Invoke(HttpContext httpContext)
+        {
+            if (httpContext.Response.SupportsTrailers())
+            {
+                httpContext.Response.DeclareTrailer("Server-Timing");
+
+                var stopWatch = new Stopwatch();
+                stopWatch.Start();
+
+                await _next(httpContext);
+
+                stopWatch.Stop();
+                // Not yet supported in any browser dev tools
+                httpContext.Response.AppendTrailer("Server-Timing", $"app;dur={stopWatch.ElapsedMilliseconds}.0");
+            }
+            else
+            {
+                // Works in chrome
+                // httpContext.Response.Headers.Append("Server-Timing", $"app;dur=25.0");
+                await _next(httpContext);
+            }
+        }
+    }
+
+    // Extension method used to add the middleware to the HTTP request pipeline.
+    public static class TimingMiddlewareExtensions
+    {
+        public static IApplicationBuilder UseTimingMiddleware(this IApplicationBuilder builder)
+        {
+            return builder.UseMiddleware<TimingMiddleware>();
+        }
+    }
+
+
 }
